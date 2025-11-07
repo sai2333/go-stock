@@ -23,7 +23,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-//go:embed frontend/dist
+//go:embed all:frontend/dist
 var assets embed.FS
 
 //go:embed build/appicon.png
@@ -143,6 +143,9 @@ func main() {
 		Logger:                   nil,
 		LogLevel:                 logger.DEBUG,
 		LogLevelProduction:       logger.ERROR,
+		Debug: options.Debug{
+			OpenInspectorOnStartup: true,
+		},
 		OnStartup:                app.startup,
 		OnDomReady:               app.domReady,
 		OnBeforeClose:            app.beforeClose,

@@ -191,36 +191,54 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 }
 
 func GetSettingConfig() *SettingConfig {
-	settingConfig := &SettingConfig{}
-	settings := &Settings{}
-	aiConfigs := make([]*AIConfig, 0)
-	// 处理数据库查询可能返回的空结果
-	result := db.Dao.Model(&Settings{}).First(settings)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		// 初始化默认设置并保存到数据库
-		settings = &Settings{OpenAiEnable: false, CrawlTimeOut: 60}
-		db.Dao.Create(settings)
-	}
+    settingConfig := &SettingConfig{}
+    settings := &Settings{}
+    aiConfigs := make([]*AIConfig, 0)
+    // 处理数据库查询可能返回的空结果
+    result := db.Dao.Model(&Settings{}).First(settings)
+    if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+        // 初始化默认设置并保存到数据库
+        // 默认开启AI，并设置基础超时时间
+        settings = &Settings{OpenAiEnable: true, CrawlTimeOut: 60}
+        db.Dao.Create(settings)
+    }
 
-	if settings.OpenAiEnable {
-		// 处理AI配置查询可能出现的错误
-		result = db.Dao.Model(&AIConfig{}).Find(&aiConfigs)
-		if result.Error != nil {
-			logger.SugaredLogger.Error("查询AI配置失败:", result.Error)
-		} else if len(aiConfigs) > 0 {
-			lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
-				if item.TimeOut <= 0 {
-					item.TimeOut = 60 * 5
-				}
-			})
-		}
-		if settings.CrawlTimeOut <= 0 {
-			settings.CrawlTimeOut = 60
-		}
-		if settings.KDays < 30 {
-			settings.KDays = 120
-		}
-	}
+    if settings.OpenAiEnable {
+        // 处理AI配置查询可能出现的错误
+        result = db.Dao.Model(&AIConfig{}).Find(&aiConfigs)
+        if result.Error != nil {
+            logger.SugaredLogger.Error("查询AI配置失败:", result.Error)
+        } else if len(aiConfigs) > 0 {
+            lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
+                if item.TimeOut <= 0 {
+                    item.TimeOut = 60 * 5
+                }
+            })
+        }
+        // 若无任何AI配置，插入硅基流动（SiliconFlow）默认配置
+        if len(aiConfigs) == 0 {
+            defaultCfg := &AIConfig{
+                Name:        "SiliconFlow DeepSeek",
+                BaseUrl:     "https://api.siliconflow.cn/v1",
+                ApiKey:      "",
+                ModelName:   "deepseek-ai/DeepSeek-V3",
+                MaxTokens:   2048,
+                Temperature: 0.2,
+                TimeOut:     60 * 5,
+            }
+            if err := db.Dao.Create(defaultCfg).Error; err != nil {
+                logger.SugaredLogger.Errorf("插入默认硅基流动配置失败: %v", err)
+            } else {
+                aiConfigs = append(aiConfigs, defaultCfg)
+            }
+        }
+        if settings.CrawlTimeOut <= 0 {
+            settings.CrawlTimeOut = 60
+        }
+        if settings.KDays < 30 {
+            settings.KDays = 120
+        }
+    }
 	if settings.BrowserPath == "" {
 		settings.BrowserPath, _ = CheckBrowser()
 	}

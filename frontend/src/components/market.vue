@@ -12,7 +12,8 @@ import {
   SaveAsMarkdown,
   ShareAnalysis,
   SummaryStockNews,
-  GetAiConfigs
+  GetAiConfigs,
+  ChatWithAgent
 } from "../../wailsjs/go/main/App";
 import {EventsOff, EventsOn} from "../../wailsjs/runtime";
 import NewsList from "./newsList.vue";
@@ -75,6 +76,21 @@ const indexInterval = ref(null)
 const indexIndustryRank = ref(null)
 const stockCode= ref('')
 const enableTools= ref(true)
+// 一键AI选股建议（Agent流式输出）
+const adviceModal = ref(false)
+const aiAdvice = ref("")
+const adviceLoading = ref(false)
+// 监控是否开始收到流式内容
+const streamStarted = ref(false)
+let streamWatchTimer = null
+// 控制是否在“AI选股建议”面板显示工具调用细节与工具返回内容
+const showAgentToolOutput = ref(false)
+// 选择性展示的工具白名单（仅这些工具的结果会呈现在面板中）
+const allowedToolNames = ["ChoiceStockByIndicators"]
+// 记录最近一次 assistant 帧里声明的工具调用名称，用于匹配后续 tool 帧
+const pendingToolNames = ref([])
+// 仅在首次收到 AI 输出时触发断点，避免每个切片都暂停
+const breakOnFirstAiOutput = ref(false)
 
 function getIndex() {
   GlobalStockIndexes().then((res) => {
@@ -87,8 +103,11 @@ function getIndex() {
   })
 }
 
+const defaultMarketTab = '市场快讯'
+
 onBeforeMount(() => {
-  nowTab.value = route.query.name
+  // 路由未携带 name 时，使用默认标签，避免页面空白
+  nowTab.value = route.query.name || defaultMarketTab
   stockCode.value = route.query.stockCode
   GetConfig().then(result => {
     summaryBTN.value = result.openAiEnable
@@ -127,8 +146,10 @@ onBeforeUnmount(() => {
   EventsOff("newTelegraph")
   EventsOff("newSinaNews")
   EventsOff("summaryStockNews")
+  EventsOff("agent-message")
   clearInterval(indexInterval.value)
   clearInterval(indexIndustryRank.value)
+  if (streamWatchTimer) { clearTimeout(streamWatchTimer); streamWatchTimer = null }
 })
 
 EventsOn("changeMarketTab", async (msg) => {
@@ -264,6 +285,98 @@ EventsOn("summaryStockNews", async (msg) => {
   }
 })
 
+// 监听Agent消息：将思考与回答流式写入到建议面板
+EventsOn("agent-message", (data) => {
+  // assistant 流式内容（思考 + 回答 + 工具调用）
+  console.log('[Agent Message]', data)
+  if (data['role'] === 'assistant') {
+    adviceLoading.value = false
+    if (data['reasoning_content']) {
+      aiAdvice.value += data['reasoning_content']
+      if (!breakOnFirstAiOutput.value) {
+        console.log('[AI Output] reasoning_content slice:', data['reasoning_content'])
+        breakOnFirstAiOutput.value = true
+      }
+    }
+    if (data['content']) {
+      aiAdvice.value += data['content']
+      if (!breakOnFirstAiOutput.value) {
+        console.log('[AI Output] content slice:', data['content'])
+        breakOnFirstAiOutput.value = true
+      }
+    }
+    // 工具调用信息展示，兼容缺失字段
+    if (data['tool_calls']) {
+      // 记录本轮调用的工具名称，用于后续 tool 帧的选择性展示
+      pendingToolNames.value = []
+      for (const call of data['tool_calls']) {
+        const func = call && call.function ? call.function : null
+        const name = func && func.name ? func.name : (call && call.name ? call.name : '未知工具')
+        if (name) {
+          pendingToolNames.value.push(name)
+        }
+        if (!showAgentToolOutput.value) {
+          continue
+        }
+        let args = ''
+        if (func && func.arguments) {
+          args = typeof func.arguments === 'string' ? func.arguments : JSON.stringify(func.arguments)
+        } else {
+          args = '无'
+        }
+        aiAdvice.value += `\n\`\`\`${name}\n参数：${args}\n\`\`\`\n`
+      }
+    }
+  }
+  // tool 角色内容（工具返回结果）
+  if (data['role'] === 'tool' && data['content']) {
+    // 仅当最近一次声明的工具调用包含白名单工具时，才展示其结果
+    const hasAllowed = pendingToolNames.value.some(n => allowedToolNames.includes(n))
+    if (hasAllowed) {
+      aiAdvice.value += data['content']
+    } else if (showAgentToolOutput.value) {
+      // 在手动开启调试时仍允许查看其他工具输出
+      aiAdvice.value += data['content']
+    }
+  }
+  // 结束标记
+  if (data['response_meta'] && data['response_meta'].finish_reason === 'stop') {
+    adviceLoading.value = false
+  }
+})
+
+function oneClickAiPick(){
+  adviceModal.value = true
+  aiAdvice.value = ""
+  adviceLoading.value = true
+  // 启动看门狗：15秒内无流式输出则提示
+  streamStarted.value = false
+  if (streamWatchTimer) { clearTimeout(streamWatchTimer); streamWatchTimer = null }
+  streamWatchTimer = setTimeout(() => {
+    if (!streamStarted.value && adviceLoading.value) {
+      adviceLoading.value = false
+      message.warning("流式输出未开始，可能模型或网络原因。请稍后重试或更换模型。")
+    }
+  }, 15000)
+  // 防御：AI配置未加载时不调用后端，避免崩溃
+  if (!aiConfigId.value || aiConfigId.value === 0) {
+    adviceLoading.value = false
+    aiAdvice.value = "AI配置未加载或无效，请先在设置中选择有效的AI模型。"
+    return
+  }
+  const questionText = [
+    "综合当日市场情绪、资金流向、行业板块热点与重大资讯，输出结构化买入建议。",
+    "要求：",
+    "- 提供保守/平衡/积极三套方案",
+    "- 推荐板块/标的清单（含代码、买入区间、仓位建议、止盈/止损、核心逻辑）",
+    "- 风险控制与触发条件（回撤、波动、事件风险）",
+    "- 用Markdown输出，列表+表格结合，结尾给出执行清单",
+    "- 工具仅用于检索，不要输出任何市场资讯/新闻原文或摘要；只输出最终投资方案与执行清单"
+  ].join("\n")
+  // 直接调用Agent，选择当前AI配置
+  ChatWithAgent(questionText, aiConfigId.value, 0)
+}
+
 async function copyToClipboard() {
   try {
     await navigator.clipboard.writeText(aiSummary.value);
@@ -276,7 +389,25 @@ async function copyToClipboard() {
 function saveAsMarkdown() {
   SaveAsMarkdown('市场资讯', '市场资讯').then(result => {
     message.success(result)
-  })
+})
+
+// 轻量监听：只负责标记“已开始流式输出”并在结束时清理定时器
+EventsOn("agent-message", (data) => {
+  if (data['role'] === 'assistant') {
+    if (data['reasoning_content'] || data['content'] || (data['tool_calls'] && data['tool_calls'].length > 0)) {
+      streamStarted.value = true
+    }
+  }
+  if (data['role'] === 'tool' && data['content']) {
+    streamStarted.value = true
+  }
+  if (data['response_meta'] && data['response_meta'].finish_reason === 'stop') {
+    if (streamWatchTimer) { clearTimeout(streamWatchTimer); streamWatchTimer = null }
+    if (!aiAdvice.value || aiAdvice.value.trim() === '') {
+      message.info("本次未返回有效内容，可能工具调用失败或限速。可重试或更换模型。")
+    }
+  }
+})
 }
 
 function share() {
@@ -318,6 +449,9 @@ function ReFlesh(source) {
 
 <template>
   <n-card>
+    <n-flex justify="end" style="margin-bottom: 8px">
+      <n-button size="small" type="primary" @click="oneClickAiPick">一键AI选股建议</n-button>
+    </n-flex>
     <n-tabs type="line" animated @update-value="updateTab" :value="nowTab" style="--wails-draggable:no-drag">
       <n-tab-pane name="市场快讯" tab="市场快讯">
         <n-grid :cols="2" :y-gap="0">
@@ -688,6 +822,28 @@ function ReFlesh(source) {
         <n-button size="tiny" type="success" @click="copyToClipboard">复制到剪切板</n-button>
         <n-button size="tiny" type="primary" @click="saveAsMarkdown">保存为Markdown文件</n-button>
         <n-button size="tiny" type="error" @click="share">分享到项目社区</n-button>
+      </n-flex>
+    </template>
+  </n-modal>
+
+  <!-- 一键AI选股建议（Agent流式输出） -->
+  <n-modal transform-origin="center" v-model:show="adviceModal" preset="card" style="width: 880px;"
+           :title="'AI选股建议'">
+    <n-spin size="small" :show="adviceLoading">
+      <MdPreview style="height: 480px;text-align: left" :modelValue="aiAdvice" :theme="theme"/>
+    </n-spin>
+    <template #action>
+      <n-flex justify="space-between" style="margin-bottom: 10px">
+        <n-select style="width: 40%" v-model:value="aiConfigId" label-field="name" value-field="ID"
+                  :options="aiConfigs" placeholder="请选择AI模型服务配置"/>
+        <n-gradient-text type="warning">未选择模型将无法生成建议，请先选择。</n-gradient-text>
+        <n-button size="tiny" type="primary" @click="oneClickAiPick">重新建议</n-button>
+      </n-flex>
+    </template>
+    <template #footer>
+      <n-flex justify="space-between">
+        <n-text type="info">实时流式建议，完成后可复制或保存。</n-text>
+        <n-text type="error">*仅供参考，投资有风险，入市需谨慎。</n-text>
       </n-flex>
     </template>
   </n-modal>

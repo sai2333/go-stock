@@ -13,16 +13,17 @@ import (
 var Dao *gorm.DB
 
 func Init(sqlitePath string) {
-	dbLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags),
-		logger.Config{
-			SlowThreshold:             time.Second * 3,
-			Colorful:                  false,
-			IgnoreRecordNotFoundError: true,
-			ParameterizedQueries:      false,
-			LogLevel:                  logger.Info,
-		},
-	)
+    dbLogger := logger.New(
+        log.New(os.Stdout, "\r\n", log.LstdFlags),
+        logger.Config{
+            SlowThreshold:             time.Second * 3,
+            Colorful:                  false,
+            IgnoreRecordNotFoundError: true,
+            ParameterizedQueries:      false,
+            // 关闭控制台SQL详细日志，改为静默
+            LogLevel:                  logger.Silent,
+        },
+    )
 	var openDb *gorm.DB
 	var err error
 	if sqlitePath == "" {

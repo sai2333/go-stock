@@ -40,9 +40,22 @@ func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId in
 }
 
 func (receiver StockAiAgent) Chat(question string, aiConfigId int, sysPromptId *int) chan *schema.Message {
-	ch := make(chan *schema.Message, 512)
-	ctx := context.Background()
-	stockAiAgent := receiver.newStockAiAgent(&ctx, aiConfigId)
+    ch := make(chan *schema.Message, 512)
+    ctx := context.Background()
+    stockAiAgent := receiver.newStockAiAgent(&ctx, aiConfigId)
+
+    // 防御：aiConfigId无效时避免nil指针导致应用崩溃
+    if stockAiAgent == nil {
+        go func() {
+            defer close(ch)
+            logger.SugaredLogger.Errorf("invalid aiConfigId: %d, StockAiAgent not found", aiConfigId)
+            ch <- &schema.Message{
+                Role:    schema.Assistant,
+                Content: "AI配置未加载或无效，请在设置中选择有效的AI模型。",
+            }
+        }()
+        return ch
+    }
 
 	sysPrompt := ""
 	if sysPromptId == nil || *sysPromptId == 0 {

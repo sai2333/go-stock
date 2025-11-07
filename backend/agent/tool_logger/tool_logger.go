@@ -1,16 +1,17 @@
 package tool_logger
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"go-stock/backend/logger"
-	"io"
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "go-stock/backend/logger"
+    "io"
 
-	"github.com/cloudwego/eino/callbacks"
-	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/flow/agent/react"
-	"github.com/cloudwego/eino/schema"
+    "github.com/cloudwego/eino/callbacks"
+    "github.com/cloudwego/eino/components/model"
+    "github.com/cloudwego/eino/flow/agent/react"
+    "github.com/cloudwego/eino/schema"
 )
 
 // @Author spark
@@ -45,9 +46,20 @@ func (cb *LoggerCallback) OnEnd(ctx context.Context, info *callbacks.RunInfo, ou
 }
 
 func (cb *LoggerCallback) OnError(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
-	logger.SugaredLogger.Infof("=========[OnError]=========")
-	logger.SugaredLogger.Infof("%s", err.Error())
-	return ctx
+    logger.SugaredLogger.Infof("=========[OnError]=========")
+    logger.SugaredLogger.Infof("%s", err.Error())
+    // 将错误透传到前端，便于用户定位失败原因
+    if cb.MessageChanel != nil {
+        select {
+        case cb.MessageChanel <- &schema.Message{
+            Role:    schema.Assistant,
+            Content: fmt.Sprintf("工具或Agent错误：%s", err.Error()),
+        }:
+        default:
+            // 避免阻塞：若通道已满则跳过
+        }
+    }
+    return ctx
 }
 
 func (cb *LoggerCallback) OnEndWithStreamOutput(ctx context.Context, info *callbacks.RunInfo,

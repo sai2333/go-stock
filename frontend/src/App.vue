@@ -39,7 +39,7 @@ import {FireFilled, FireOutlined, NotificationFilled, StockOutlined} from "@vico
 
 
 const router = useRouter()
-const loading = ref(true)
+const loading = ref(false)
 const loadingMsg = ref("加载数据中...")
 const enableNews = ref(false)
 const contentStyle = ref("")
@@ -117,6 +117,7 @@ const menuOptions = ref([
               href: '#',
               to: {
                 name: 'market',
+                query: { name: '市场快讯' },
                 params: {}
               },
               onClick: () => {
@@ -565,14 +566,34 @@ EventsOn("telegraph", (data) => {
 })
 
 EventsOn("loadingMsg", (data) => {
-  if(data==="done"){
+  const msg = typeof data === 'string' ? data.trim().toLowerCase() : ''
+  if (msg === 'done') {
     loadingMsg.value = "加载完成..."
     EventsEmit("loadingDone", "app")
-    loading.value  = false
-  }else{
-    loading.value  = true
-    loadingMsg.value = data
+    loading.value = false
+  } else {
+    loading.value = true
+    loadingMsg.value = typeof data === 'string' ? data : JSON.stringify(data)
   }
+})
+
+// 兜底：如果 8 秒内未收到 done，则自动结束加载态
+onMounted(() => {
+  // 路由就绪后也结束加载态（避免事件丢失）
+  try {
+    router.isReady && router.isReady().then(() => {
+      if (loading.value) {
+        loading.value = false
+        loadingMsg.value = "加载完成..."
+      }
+    })
+  } catch (_) {}
+  setTimeout(() => {
+    if (loading.value) {
+      loading.value = false
+      loadingMsg.value = "加载完成..."
+    }
+  }, 8000)
 })
 
 onBeforeUnmount(() => {

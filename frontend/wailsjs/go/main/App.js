@@ -54,6 +54,10 @@ export function ExportConfig() {
   return window['go']['main']['App']['ExportConfig']();
 }
 
+export function FinancialReports(arg1) {
+  return window['go']['main']['App']['FinancialReports'](arg1);
+}
+
 export function Follow(arg1) {
   return window['go']['main']['App']['Follow'](arg1);
 }
@@ -192,6 +196,10 @@ export function NewsPush(arg1) {
 
 export function OpenURL(arg1) {
   return window['go']['main']['App']['OpenURL'](arg1);
+}
+
+export function QueryStockNews(arg1) {
+  return window['go']['main']['App']['QueryStockNews'](arg1);
 }
 
 export function ReFleshTelegraphList(arg1) {

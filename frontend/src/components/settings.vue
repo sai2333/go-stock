@@ -51,13 +51,13 @@ const formValue = ref({
 // 添加一个新的AI配置到列表
 function addAiConfig() {
   formValue.value.openAI.aiConfigs.push(new data.AIConfig({
-    name: '',
-    baseUrl: 'https://api.deepseek.com',
+    name: 'SiliconFlow DeepSeek',
+    baseUrl: 'https://api.siliconflow.cn/v1',
     apiKey: '',
-    modelName: 'deepseek-chat',
-    temperature: 0.1,
-    maxTokens: 1024,
-    timeOut: 60,
+    modelName: 'deepseek-ai/DeepSeek-V3',
+    temperature: 0.2,
+    maxTokens: 2048,
+    timeOut: 300,
   }));
 }
 

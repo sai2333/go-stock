@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"go-stock/backend/agent"
-	"go-stock/backend/data"
-	"go-stock/backend/models"
+    "github.com/wailsapp/wails/v2/pkg/runtime"
+    "go-stock/backend/agent"
+    "go-stock/backend/data"
+    "go-stock/backend/models"
+    "go-stock/backend/util"
 )
 
 // @Author spark
@@ -24,14 +25,14 @@ func (a *App) StockNotice(stockCode string) []any {
 }
 
 func (a *App) IndustryResearchReport(industryCode string) []any {
-	return data.NewMarketNewsApi().IndustryResearchReport(industryCode, 7)
+    return data.NewMarketNewsApi().IndustryResearchReport(industryCode, 7)
 }
 func (a App) EMDictCode(code string) []any {
 	return data.NewMarketNewsApi().EMDictCode(code, a.cache)
 }
 
 func (a App) AnalyzeSentiment(text string) data.SentimentResult {
-	return data.AnalyzeSentiment(text)
+    return data.AnalyzeSentiment(text)
 }
 
 func (a App) HotStock(marketType string) *[]models.HotItem {
@@ -45,29 +46,41 @@ func (a App) HotEvent(size int) *[]models.HotEvent {
 	return data.NewMarketNewsApi().HotEvent(size)
 }
 func (a App) HotTopic(size int) []any {
-	if size <= 0 {
-		size = 10
-	}
-	return data.NewMarketNewsApi().HotTopic(size)
+    if size <= 0 {
+        size = 10
+    }
+    return data.NewMarketNewsApi().HotTopic(size)
 }
 
 func (a App) InvestCalendarTimeLine(yearMonth string) []any {
-	return data.NewMarketNewsApi().InvestCalendar(yearMonth)
+    return data.NewMarketNewsApi().InvestCalendar(yearMonth)
 }
 func (a App) ClsCalendar() []any {
-	return data.NewMarketNewsApi().ClsCalendar()
+    return data.NewMarketNewsApi().ClsCalendar()
 }
 
 func (a App) SearchStock(words string) map[string]any {
-	return data.NewSearchStockApi(words).SearchStock(5000)
+    return data.NewSearchStockApi(words).SearchStock(5000)
 }
 func (a App) GetHotStrategy() map[string]any {
-	return data.NewSearchStockApi("").HotStrategy()
+    return data.NewSearchStockApi("").HotStrategy()
 }
 
 func (a App) ChatWithAgent(question string, aiConfigId int, sysPromptId *int) {
-	ch := agent.NewStockAiAgentApi().Chat(question, aiConfigId, sysPromptId)
-	for msg := range ch {
-		runtime.EventsEmit(a.ctx, "agent-message", msg)
-	}
+    ch := agent.NewStockAiAgentApi().Chat(question, aiConfigId, sysPromptId)
+    for msg := range ch {
+        runtime.EventsEmit(a.ctx, "agent-message", msg)
+    }
+}
+
+// --- New exported helpers for comprehensive stock analysis ---
+// Financial reports by stock code (Xueqiu source)
+func (a *App) FinancialReports(stockCode string) *[]string {
+    return data.GetFinancialReportsByXUEQIU(stockCode, 30)
+}
+
+// Query stock-related news by keywords (returns markdown table string)
+func (a *App) QueryStockNews(searchWords string) string {
+    res := data.NewMarketNewsApi().CailianpressWeb(searchWords)
+    return util.MarkdownTableWithTitle(searchWords+"市场资讯/新闻", res.List)
 }

@@ -18,6 +18,9 @@ import {
   Greet,
   InitializeGroupSort,
   NewChatStream,
+  ChatWithAgent,
+  FinancialReports,
+  QueryStockNews,
   OpenURL,
   RemoveGroup,
   RemoveStockGroup,
@@ -71,6 +74,8 @@ import {keys, padStart} from "lodash";
 import {useRoute, useRouter} from 'vue-router'
 import MoneyTrend from "./moneyTrend.vue";
 import StockSparkLine from "./stockSparkLine.vue";
+import KLineChart from "./KLineChart.vue";
+import StockResearchReportList from "./StockResearchReportList.vue";
 
 const route = useRoute()
 const router = useRouter()
@@ -86,6 +91,53 @@ const downColor = '#00da3c';
 const downBorderColor = '';
 const kLineChartRef = ref(null);
 const kLineChartRef2 = ref(null);
+
+// 初始化弹幕 WebSocket，失败时回退到备选地址，并在错误时不干扰页面
+function initDanmuWebSocket() {
+  if (!data.enableDanmu) {
+    return
+  }
+  try {
+    const isLocal = window.location.hostname === 'localhost'
+    const urls = isLocal
+        ? ['ws://localhost:16688/ws', 'ws://8.134.249.145:16688/ws']
+        : ['ws://8.134.249.145:16688/ws', 'ws://localhost:16688/ws']
+    let idx = 0
+    const attempt = () => {
+      if (idx >= urls.length) {
+        console.warn('弹幕服务连接失败，已跳过。')
+        return
+      }
+      const url = urls[idx++]
+      try {
+        ws.value = new WebSocket(url)
+      } catch (e) {
+        console.warn('WebSocket 创建失败，尝试下一个地址。', e)
+        setTimeout(attempt, 2000)
+        return
+      }
+      ws.value.onopen = () => {
+        // 连接成功
+      }
+      ws.value.onmessage = (event) => {
+        if (data.enableDanmu && event && event.data) {
+          danmus.value.push(event.data)
+        }
+      }
+      ws.value.onerror = (error) => {
+        console.warn('WebSocket 错误，尝试备用地址。', error)
+        try { ws.value && ws.value.close() } catch {}
+        setTimeout(attempt, 1500)
+      }
+      ws.value.onclose = () => {
+        // 连接关闭时不强制重连，避免页面抖动
+      }
+    }
+    attempt()
+  } catch (err) {
+    console.warn('初始化弹幕服务失败：', err)
+  }
+}
 
 
 const handleProgress = (progress) => {
@@ -107,9 +159,20 @@ const modalShow = ref(false)
 const modalShow2 = ref(false)
 const modalShow3 = ref(false)
 const modalShow4 = ref(false)
+// 一键AI选股建议（Agent流式输出）
+const adviceModal = ref(false)
+const aiAdvice = ref("")
+const adviceLoading = ref(false)
 const modalShow5 = ref(false)
 const addBTN = ref(true)
 const enableTools = ref(false)
+// 综合分析弹窗状态
+const compModal = ref(false)
+const compLoading = ref(false)
+const compFinancial = ref("")
+const compNews = ref("")
+const compAdvice = ref("")
+const compKDays = ref(60)
 const formModel = ref({
   name: "",
   code: "",
@@ -128,7 +191,7 @@ const userPromptOptions = ref([])
 const data = reactive({
   modelName: "",
   chatId: "",
-  question: "",
+  question: "分析和总结",
   sysPromptId: null,
   aiConfigId: null,
   name: "",
@@ -143,6 +206,12 @@ const data = reactive({
   enableDanmu: false,
   darkTheme: false,
   changePercent: 0
+})
+// 根据名称变化动态更新默认问题（仅在名称可用时）
+watch(() => data.name, (newName) => {
+  if (newName) {
+    data.question = `${newName}分析和总结，买入建议，止盈止损建议`
+  }
 })
 const feishiInterval = ref(null)
 
@@ -370,9 +439,15 @@ onBeforeMount(() => {
   EventsOn("newChatStream", async (msg) => {
     data.loading = false
     if (msg === "DONE") {
-      SaveAIResponseResult(data.code, data.name, data.airesult, data.chatId, data.question, data.aiConfigId)
-      message.info("AI分析完成！")
-      message.destroyAll()
+      // 如果是综合分析弹窗，则写入综合建议区域；否则写入AI分析面板并保存
+      if (compModal.value) {
+        message.info("综合分析AI建议已完成！")
+        message.destroyAll()
+      } else {
+        SaveAIResponseResult(data.code, data.name, data.airesult, data.chatId, data.question, data.aiConfigId)
+        message.info("AI分析完成！")
+        message.destroyAll()
+      }
     } else {
       if (msg.chatId) {
         data.chatId = msg.chatId
@@ -381,10 +456,18 @@ onBeforeMount(() => {
         data.question = msg.question
       }
       if (msg.content) {
-        data.airesult = data.airesult + msg.content
+        if (compModal.value) {
+          compAdvice.value = compAdvice.value + msg.content
+        } else {
+          data.airesult = data.airesult + msg.content
+        }
       }
       if (msg.extraContent) {
-        data.airesult = data.airesult + msg.extraContent
+        if (compModal.value) {
+          compAdvice.value = compAdvice.value + msg.extraContent
+        } else {
+          data.airesult = data.airesult + msg.extraContent
+        }
       }
 
     }
@@ -473,6 +556,68 @@ onBeforeMount(() => {
       },
     })
   })
+  // 监听Agent消息，将流式输出写入建议面板
+  EventsOn("agent-message", (data) => {
+    const frame = JSON.parse(JSON.stringify(data));
+    console.groupCollapsed('[agent-message]', frame.role, frame.response_meta && frame.response_meta.finish_reason ? frame.response_meta.finish_reason : '');
+    console.log('reasoning_content:', frame.reasoning_content);
+    console.log('content:', frame.content);
+    console.log('tool_calls:', frame.tool_calls);
+    console.log('raw:', frame);
+    if (frame.tool_calls) {
+      for (const call of frame.tool_calls) {
+        const func = call && call.function ? call.function : null;
+        const name = func && func.name ? func.name : (call && call.name ? call.name : '未知工具');
+        const args = func && func.arguments ? func.arguments : '';
+        console.log('tool:', name, 'args:', args);
+      }
+    }
+    console.groupEnd();
+    debugger;
+    // assistant 内容：思考、回答与工具调用
+    if (data['role'] === 'assistant') {
+      adviceLoading.value = false
+      if (data['reasoning_content']) {
+        aiAdvice.value += data['reasoning_content']
+        if (compModal.value) {
+          compAdvice.value += data['reasoning_content']
+        }
+      }
+      if (data['content']) {
+        aiAdvice.value += data['content']
+        if (compModal.value) {
+          compAdvice.value += data['content']
+        }
+      }
+      if (data['tool_calls']) {
+        for (const call of data['tool_calls']) {
+          const func = call && call.function ? call.function : null
+          const name = func && func.name ? func.name : (call && call.name ? call.name : '未知工具')
+          let args = ''
+          if (func && func.arguments) {
+            args = typeof func.arguments === 'string' ? func.arguments : JSON.stringify(func.arguments)
+          } else {
+            args = '无'
+          }
+          const toolBlock = `\n\`\`\`${name}\n参数：${args}\n\`\`\`\n`
+          aiAdvice.value += toolBlock
+          if (compModal.value) {
+            compAdvice.value += toolBlock
+          }
+        }
+      }
+    }
+    // tool 角色的返回内容
+    if (data['role'] === 'tool' && data['content']) {
+      aiAdvice.value += data['content']
+      if (compModal.value) {
+        compAdvice.value += data['content']
+      }
+    }
+    if (data['response_meta'] && data['response_meta'].finish_reason === 'stop') {
+      adviceLoading.value = false
+    }
+  })
 })
 
 onMounted(() => {
@@ -513,27 +658,8 @@ onMounted(() => {
   GetVersionInfo().then((res) => {
     icon.value = res.icon;
   });
-  // 创建 WebSocket 连接
-  ws.value = new WebSocket('ws://8.134.249.145:16688/ws'); // 替换为你的 WebSocket 服务器地址
-  //ws.value = new WebSocket('ws://localhost:16688/ws'); // 替换为你的 WebSocket 服务器地址
-
-  ws.value.onopen = () => {
-    //console.log('WebSocket 连接已打开');
-  };
-
-  ws.value.onmessage = (event) => {
-    if (data.enableDanmu) {
-      danmus.value.push(event.data);
-    }
-  };
-
-  ws.value.onerror = (error) => {
-    console.error('WebSocket 错误:', error);
-  };
-
-  ws.value.onclose = () => {
-    //console.log('WebSocket 连接已关闭');
-  };
+  // 创建 WebSocket 连接（带容错与回退）
+  initDanmuWebSocket()
 })
 // 清理拖拽事件监听器
 // 清理拖拽事件监听器
@@ -581,7 +707,11 @@ function initDraggableTabs() {
 onBeforeUnmount(() => {
   // //console.log(`the component is now unmounted.`)
   //clearInterval(ticker.value)
-  ws.value.close()
+  try {
+    if (ws.value && typeof ws.value.close === 'function') {
+      ws.value.close()
+    }
+  } catch (_) {}
   message.destroyAll()
   notify.destroyAll()
   clearInterval(feishiInterval.value)
@@ -595,6 +725,7 @@ onBeforeUnmount(() => {
   EventsOff("updateVersion")
   EventsOff("warnMsg")
   EventsOff("loadingDone")
+  EventsOff("agent-message")
 
   cleanupDraggableTabs()
 
@@ -1583,6 +1714,81 @@ function aiReCheckStock(stock, stockCode) {
   NewChatStream(stock, stockCode, data.question, data.aiConfigId, data.sysPromptId, enableTools.value)
 }
 
+// 已移除临时调试包装，按钮直接调用 oneClickAiPickStock
+
+function oneClickAiPickStock(){
+  adviceModal.value = true
+  aiAdvice.value = ""
+  adviceLoading.value = true
+  // 保持逻辑简洁，无多余调试输出
+  // 防御：AI配置未加载时不调用后端，避免崩溃
+  if (!data.aiConfigId || data.aiConfigId === 0) {
+    adviceLoading.value = false
+    aiAdvice.value = "AI配置未加载或无效，请先在设置中选择有效的AI模型。"
+    return
+  }
+  const base = `目标个股：${data.name}[${data.code}]`;
+  const questionText = [
+    base,
+    "请基于当日市场情绪、板块资金、新闻事件、财务与估值、K线趋势与关键价位，输出结构化买入建议。",
+    "要求：",
+    "- 提供保守/平衡/积极三套方案",
+    "- 给出买入区间、仓位建议、止盈/止损、核心逻辑",
+    "- 列出风险点与触发条件（如回撤、波动、事件风险）",
+    "- 用Markdown输出，必要处使用表格，最后附执行清单"
+  ].join("\n")
+  ChatWithAgent(questionText, data.aiConfigId, 0)
+}
+
+// 打开综合分析弹窗：整合K线、研报、财务、新闻，并接入AI建议
+function openComprehensiveAnalysis() {
+  if (!data.name || !data.code) {
+    message.warning("请先选择股票或输入代码/名称")
+    return
+  }
+  compModal.value = true
+  compLoading.value = true
+  compAdvice.value = ""
+  compFinancial.value = ""
+  compNews.value = ""
+  Promise.all([
+    FinancialReports(data.code),
+    QueryStockNews(data.name)
+  ]).then(([fr, news]) => {
+    if (fr && fr.length) {
+      compFinancial.value = fr.join('\n')
+    }
+    compNews.value = news || ''
+    compLoading.value = false
+  }).catch(() => {
+    compLoading.value = false
+  })
+  const questionText = [
+    `综合分析目标：${data.name}[${data.code}]`,
+    "请整合K线趋势、研报要点、财务与估值、最新新闻事件与市场情绪，输出结构化投资建议。",
+    "要求：",
+    "- 提供保守/平衡/积极三套方案",
+    "- 买入区间、仓位建议、止盈/止损、核心逻辑",
+    "- 风险点与触发条件（如回撤、波动、事件风险）",
+    "- 用Markdown输出，必要处使用表格，最后附执行清单"
+  ].join('\n')
+  if (data.aiConfigId) {
+    NewChatStream(data.name, data.code, questionText, data.aiConfigId, data.sysPromptId, enableTools.value)
+  }
+}
+
+function regenerateComprehensiveAdvice() {
+  if (!data.name || !data.code) return
+  compAdvice.value = ""
+  const questionText = [
+    `重新生成综合分析建议：${data.name}[${data.code}]`,
+    "请结合K线、研报、财务与新闻，给出结构化执行建议（买入区间、仓位、止盈/止损、核心逻辑、风险点）。"
+  ].join('\n')
+  if (data.aiConfigId) {
+    NewChatStream(data.name, data.code, questionText, data.aiConfigId, data.sysPromptId, enableTools.value)
+  }
+}
+
 function aiCheckStock(stock, stockCode) {
   GetAIResponseResult(stockCode).then(result => {
     if (result.content) {
@@ -2369,7 +2575,7 @@ function searchStockReport(stockCode) {
         <n-input v-model:value="data.question" style="text-align: left" clearable
                  type="textarea"
                  :show-count="true"
-                 placeholder="请输入您的问题:例如{{stockName}}[{{stockCode}}]分析和总结"
+                 placeholder="请输入您的问题:例如{{data.name}}[{{data.code}}]分析和总结"
                  :autosize="{
               minRows: 2,
               maxRows: 5
@@ -2377,11 +2583,75 @@ function searchStockReport(stockCode) {
         />
         <!--        <n-button size="tiny" type="error" @click="enableEditor=!enableEditor">编辑/预览</n-button>-->
         <n-button size="tiny" type="warning" @click="aiReCheckStock(data.name,data.code)">开始AI分析</n-button>
+        <n-button size="tiny" type="success" @click="openComprehensiveAnalysis">综合分析</n-button>
+        <n-button size="tiny" type="primary" @click="oneClickAiPickStock">一键AI选股建议</n-button>
         <n-button size="tiny" type="info" @click="saveAsImage(data.name,data.code)">保存为图片</n-button>
         <n-button size="tiny" type="success" @click="copyToClipboard">复制到剪切板</n-button>
         <n-button size="tiny" type="primary" @click="saveAsMarkdown">保存为Markdown文件</n-button>
         <n-button size="tiny" type="primary" @click="saveAsWord">保存为Word文件</n-button>
         <n-button size="tiny" type="error" @click="share(data.code,data.name)">分享到项目社区</n-button>
+      </n-flex>
+    </template>
+  </n-modal>
+  <!-- 个股综合分析弹窗：K线+研报+财务+新闻+AI建议 -->
+  <n-modal transform-origin="center" v-model:show="compModal" preset="card" style="width: 1000px;"
+           :title="'个股综合分析：'+data.name+'['+data.code+']'">
+    <n-spin size="small" :show="compLoading">
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <k-line-chart :code="data.code" :name="data.name" :k-days="compKDays" :dark-theme="data.darkTheme"
+                      :chart-height="300" />
+        <n-card size="small" title="个股研报">
+          <StockResearchReportList :stock-code="data.code" />
+        </n-card>
+        <n-card size="small" title="财务与公告摘要">
+          <MdPreview style="height: 220px;text-align: left" :modelValue="compFinancial" :theme="theme" />
+        </n-card>
+        <n-card size="small" title="最新市场新闻">
+          <MdPreview style="height: 220px;text-align: left" :modelValue="compNews" :theme="theme" />
+        </n-card>
+        <n-card size="small" title="AI建议">
+          <MdPreview style="height: 260px;text-align: left" :modelValue="compAdvice" :theme="theme" />
+        </n-card>
+      </div>
+    </n-spin>
+    <template #action>
+      <n-flex justify="space-between" style="margin-bottom: 10px">
+        <n-select style="width: 40%" v-model:value="data.aiConfigId" label-field="name" value-field="ID"
+                  :options="aiConfigs" placeholder="请选择AI模型服务配置"/>
+        <n-select style="width: 40%" v-model:value="data.sysPromptId" label-field="name" value-field="ID"
+                  :options="sysPromptOptions" placeholder="请选择系统提示词"/>
+        <n-switch v-model:value="enableTools" :round="false">
+          <template #checked>启用AI函数工具调用</template>
+          <template #unchecked>不启用AI函数工具调用</template>
+        </n-switch>
+        <n-button size="tiny" type="primary" @click="regenerateComprehensiveAdvice">重新生成AI建议</n-button>
+      </n-flex>
+    </template>
+    <template #footer>
+      <n-flex justify="space-between">
+        <n-text type="info">完成后可复制或保存，支持再次生成。</n-text>
+        <n-text type="error">*仅供参考，投资有风险，入市需谨慎。</n-text>
+      </n-flex>
+    </template>
+  </n-modal>
+  <!-- 一键AI选股建议（Agent流式输出） -->
+  <n-modal transform-origin="center" v-model:show="adviceModal" preset="card" style="width: 880px;"
+           :title="'AI选股建议：'+data.name+'['+data.code+']'">
+    <n-spin size="small" :show="adviceLoading">
+      <MdPreview style="height: 480px;text-align: left" :modelValue="aiAdvice" :theme="theme"/>
+    </n-spin>
+    <template #action>
+      <n-flex justify="space-between" style="margin-bottom: 10px">
+        <n-select style="width: 40%" v-model:value="data.aiConfigId" label-field="name" value-field="ID"
+                  :options="aiConfigs" placeholder="请选择AI模型服务配置"/>
+        <n-gradient-text type="warning">未选择模型将无法生成建议，请先选择。</n-gradient-text>
+        <n-button size="tiny" type="primary" @click="oneClickAiPickStock">重新建议</n-button>
+      </n-flex>
+    </template>
+    <template #footer>
+      <n-flex justify="space-between">
+        <n-text type="info">实时流式建议，完成后可复制或保存。</n-text>
+        <n-text type="error">*仅供参考，投资有风险，入市需谨慎。</n-text>
       </n-flex>
     </template>
   </n-modal>

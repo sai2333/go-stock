@@ -30,6 +30,8 @@ export function EMDictCode(arg1:string):Promise<Array<any>>;
 
 export function ExportConfig():Promise<string>;
 
+export function FinancialReports(arg1:string):Promise<any>;
+
 export function Follow(arg1:string):Promise<string>;
 
 export function FollowFund(arg1:string):Promise<string>;
@@ -99,6 +101,8 @@ export function NewChatStream(arg1:string,arg2:string,arg3:string,arg4:number,ar
 export function NewsPush(arg1:any):Promise<void>;
 
 export function OpenURL(arg1:string):Promise<void>;
+
+export function QueryStockNews(arg1:string):Promise<string>;
 
 export function ReFleshTelegraphList(arg1:string):Promise<any>;
 
