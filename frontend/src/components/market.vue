@@ -86,7 +86,13 @@ let streamWatchTimer = null
 // 控制是否在“AI选股建议”面板显示工具调用细节与工具返回内容
 const showAgentToolOutput = ref(false)
 // 选择性展示的工具白名单（仅这些工具的结果会呈现在面板中）
-const allowedToolNames = ["ChoiceStockByIndicators"]
+const allowedToolNames = [
+  "ChoiceStockByIndicators",
+  // 基金工具输出白名单
+  "SearchFundByKey",
+  "GetFundBasic",
+  "GetFundNetValues",
+]
 // 记录最近一次 assistant 帧里声明的工具调用名称，用于匹配后续 tool 帧
 const pendingToolNames = ref([])
 // 仅在首次收到 AI 输出时触发断点，避免每个切片都暂停

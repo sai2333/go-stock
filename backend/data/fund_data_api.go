@@ -223,9 +223,14 @@ func (f *FundApi) CrawlFundBasic(fundCode string) (*FundBasic, error) {
 }
 
 func (f *FundApi) GetFundList(key string) []FundBasic {
-	var funds []FundBasic
-	db.Dao.Where("code like ? or name like ?", "%"+key+"%", "%"+key+"%").Limit(10).Find(&funds)
-	return funds
+    var funds []FundBasic
+    db.Dao.Where("code like ? or name like ?", "%"+key+"%", "%"+key+"%").Limit(10).Find(&funds)
+    // 当本地数据库尚未初始化或未命中关键词时，自动抓取基金列表并重试
+    if len(funds) == 0 {
+        f.AllFund()
+        db.Dao.Where("code like ? or name like ?", "%"+key+"%", "%"+key+"%").Limit(10).Find(&funds)
+    }
+    return funds
 }
 
 func (f *FundApi) GetFollowedFund() []FollowedFund {
@@ -242,21 +247,28 @@ func (f *FundApi) GetFollowedFund() []FollowedFund {
 	return funds
 }
 func (f *FundApi) FollowFund(fundCode string) string {
-	var fund FundBasic
-	db.Dao.Where("code=?", fundCode).First(&fund)
-	if fund.Code != "" {
-		follow := &FollowedFund{
-			Code: fundCode,
-			Name: fund.Name,
-		}
-		err := db.Dao.Model(follow).Where("code = ?", fundCode).FirstOrCreate(follow, "code", fund.Code).Error
-		if err != nil {
-			return "关注失败"
-		}
-		return "关注成功"
-	} else {
-		return "基金信息不存在"
-	}
+    var fund FundBasic
+    db.Dao.Where("code=?", fundCode).First(&fund)
+    // 如果数据库没有该基金的基础信息，尝试实时爬取并入库，提升首次使用体验
+    if fund.Code == "" {
+        crawled, err := f.CrawlFundBasic(fundCode)
+        if err != nil || crawled == nil || crawled.Code == "" {
+            return "基金信息不存在"
+        }
+        // 保存基础信息（若已存在则跳过）
+        _ = db.Dao.Model(&FundBasic{}).Where("code = ?", crawled.Code).FirstOrCreate(crawled).Error
+        fund = *crawled
+    }
+
+    follow := &FollowedFund{
+        Code: fundCode,
+        Name: fund.Name,
+    }
+    err := db.Dao.Model(follow).Where("code = ?", fundCode).FirstOrCreate(follow, "code", fund.Code).Error
+    if err != nil {
+        return "关注失败"
+    }
+    return "关注成功"
 }
 func (f *FundApi) UnFollowFund(fundCode string) string {
 	var fund FollowedFund

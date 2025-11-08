@@ -61,21 +61,26 @@ func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig) *react.Agent 
 		return nil
 	}
 	// 初始化所需的 tools
-	aiTools := compose.ToolsNodeConfig{
-		Tools: []tool.BaseTool{
-			tools.GetQueryEconomicDataTool(),
-			tools.GetQueryStockPriceInfoTool(),
-			tools.GetQueryStockCodeInfoTool(),
-			tools.GetQueryMarketNewsTool(),
-			tools.GetChoiceStockByIndicatorsTool(),
-			tools.GetStockKLineTool(),
-			tools.GetInteractiveAnswerDataTool(),
-			tools.GetFinancialReportTool(),
-			tools.GetQueryStockNewsTool(),
-			tools.GetIndustryResearchReportTool(),
-			tools.GetQueryBKDictTool(),
-		},
-	}
+		aiTools := compose.ToolsNodeConfig{
+			Tools: []tool.BaseTool{
+				tools.GetQueryEconomicDataTool(),
+				tools.GetQueryStockPriceInfoTool(),
+				tools.GetQueryStockCodeInfoTool(),
+				tools.GetQueryMarketNewsTool(),
+				tools.GetChoiceStockByIndicatorsTool(),
+				tools.GetStockKLineTool(),
+				tools.GetInteractiveAnswerDataTool(),
+				tools.GetFinancialReportTool(),
+				tools.GetQueryStockNewsTool(),
+				tools.GetIndustryResearchReportTool(),
+				tools.GetQueryBKDictTool(),
+				// 基金/ETF工具
+				tools.GetSearchFundByKeyTool(),
+				tools.GetFundBasicTool(),
+				tools.GetFundNetValuesTool(),
+				tools.GetChoiceETFByIndicatorsTool(),
+			},
+		}
 	// 创建 agent
 	agent, err := react.NewAgent(*ctx, &react.AgentConfig{
 		ToolCallingModel: toolableChatModel,

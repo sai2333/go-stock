@@ -26,6 +26,7 @@ import (
 	"gorm.io/plugin/soft_delete"
 	"io"
 	"io/ioutil"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -399,6 +400,29 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 }
 
 func (receiver StockDataApi) Follow(stockCode string) string {
+	// 统一规范化用户输入的股票代码，支持纯数字和 ts 格式（例如 002119.SZ）
+	stockCode = strings.TrimSpace(stockCode)
+	// 纯数字（A 股常见 6 位）
+	if matched, _ := regexp.MatchString(`^\d{6}$`, stockCode); matched {
+		if ts := DCToTsCode(stockCode); ts != "" {
+			parts := strings.Split(ts, ".")
+			if len(parts) == 2 {
+				stockCode = strings.ToLower(parts[1]) + parts[0]
+			}
+		}
+	}
+	// 形如 002119.SZ / 600000.SH / 830xxx.BJ
+	if strings.Contains(stockCode, ".") {
+		parts := strings.Split(stockCode, ".")
+		if len(parts) == 2 {
+			// bj 前缀目前行情接口不支持，先仅处理 sh/sz
+			prefix := strings.ToLower(parts[1])
+			if prefix == "sh" || prefix == "sz" {
+				stockCode = prefix + parts[0]
+			}
+		}
+	}
+
 	//logger.SugaredLogger.Infof("Follow %s", stockCode)
 	stockInfos, err := receiver.GetStockCodeRealTimeData(stockCode)
 	if err != nil || len(*stockInfos) == 0 {
